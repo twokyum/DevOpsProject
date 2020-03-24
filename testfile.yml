@@ -6,7 +6,6 @@ Parameters:
         Description: An environment name that will be prefixed to resource names
         Type: String
 Resources:
-  ## Load balancer Security Group to allow incoming http connection to port 80 and outgoing to port 8080 as loadbalancer will be connecting to 8080 on webserver tomcat
   LBSecGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
@@ -21,14 +20,9 @@ Resources:
         CidrIp: 0.0.0.0/0
       SecurityGroupEgress:
       - IpProtocol: tcp
-        FromPort: 80
-        ToPort: 80
-        CidrIp: 0.0.0.0/0      
-      - IpProtocol: tcp
         FromPort: 8080
         ToPort: 8080
         CidrIp: 0.0.0.0/0
-  ## Webserver Security Group which are in Private subnet to allow incoming http connection to port 8080 and 22 as tomcat is running on 8080  and outgoing to all ports
   WebServerSecGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
@@ -37,9 +31,10 @@ Resources:
         Fn::ImportValue:
           !Sub "${EnvironmentName}-VPCID"
       SecurityGroupIngress:
+      # Inbound rule
       - IpProtocol: tcp
-        FromPort: 80
-        ToPort: 80
+        FromPort: 8080
+        ToPort: 8080
         CidrIp: 0.0.0.0/0
       - IpProtocol: tcp
         # ssh port
@@ -59,33 +54,31 @@ Resources:
   # 3. Load Balancer:  allows you to reduce your Auto Scaling down to 1 server at night, when very few people are using your Web Application and then Scale up to 10 or more servers during the day, when hundreds or thousands may be using it. 
   # 4. TargetGroup: reach to the target set in properties, and check the health of the target. If the target health count is good, then it is good to use. If not, it will use create another. 
 
-  #instace profile contains the IAM Role name(s) that we want to associate to our auto scaling EC2 Servers
-  # ProfileWithRolesForOurApp:
-  #   Type: AWS::IAM::InstanceProfile
-  #   Properties: 
-  #     InstanceProfileName: UdacityS3ReadOnlyEC2
-  #     Roles:
-  #       - UdacityS3ReadOnlyEC2
-
   WebAppLaunchConfig:
     Type: AWS::AutoScaling::LaunchConfiguration
     Properties:
       UserData:
+        # WebApp on tomcat webserver
         Fn::Base64: !Sub |
           #!/bin/bash
-          exec > >(tee /var/log/user-data.log|logger -t user-data -s 2>/dev/console) 2>&1
-          apt update -y
-          apt install -y apache2
-          systemctl start apache2
-          systemctl enable apache2
+          # Install docker
+          apt-get update
+          apt-get install -y apt-transport-https ca-certificates curl software-properties-common
+          curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo apt-key add -
+          add-apt-repository \
+          "deb [arch=amd64] https://download.docker.com/linux/ubuntu \
+          $(lsb_release -cs) \
+          stable"
+          apt-get update
+          apt-get install -y docker-ce
+          usermod -aG docker ubuntu
+          docker run -p 8080:8080 tomcat:8.0
       ImageId: ami-005bdb005fb00e791
-      KeyName: twokyumpair    #Optionally apply ssh key
+      #KeyName: that-one    #Optionally apply ssh key
       SecurityGroups:
       # Open to the world
       - Ref: WebServerSecGroup
-      # IamInstanceProfile:
-      #   Ref: ProfileWithRolesForOurApp      
-      InstanceType: t2.small
+      InstanceType: t3.medium
       BlockDeviceMappings:
       - DeviceName: "/dev/sdk"
         Ebs:
@@ -95,11 +88,12 @@ Resources:
     Type: AWS::AutoScaling::AutoScalingGroup
     Properties:
       VPCZoneIdentifier:
+      # Fn::ImportValue will refer to the importvalue that is in output. 
       - Fn::ImportValue: 
           !Sub "${EnvironmentName}-PRIV-NETS"
       LaunchConfigurationName:
         Ref: WebAppLaunchConfig
-      MinSize: '3'
+      MinSize: '1'
       MaxSize: '5'
       TargetGroupARNs:
       - Ref: WebAppTargetGroup
@@ -112,7 +106,6 @@ Resources:
       - Fn::ImportValue: !Sub "${EnvironmentName}-PUB2-SN"
       SecurityGroups:
       - Ref: LBSecGroup
-
   Listener:
     # Listner is a process that checks for connection requests. It is configured with a protocol and a port for front-end (client to load balancer) connections, and a protocol and a port for back-end (load balancer to back-end instance) connections.
     # Elastic Load Balancing supports http, https, ssl, tcp 
